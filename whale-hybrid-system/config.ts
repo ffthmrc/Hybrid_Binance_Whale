@@ -59,6 +59,7 @@ export const SYSTEM_CONFIG = {
     PRICE_CHANGE_THRESHOLD: 1.0,  // Genel minimum fiyat değişimi % (UI'dan da değiştirilebilir)
     COOLDOWN_MS: 15000,           // Aynı coin için alert arası süre (15 saniye)
     TREND_HIGHLIGHT_DURATION: 5000, // Trend highlight süresi (5 saniye)
+    TREND_COOLDOWN_MS: 60000,     // TREND_START için aynı coin'e cooldown (60 saniye) - çift bildirimleri engeller
   },
   
   // ==========================================

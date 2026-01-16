@@ -438,29 +438,35 @@ const App: React.FC = () => {
         if (!alertCreated) {
           const trendCheck = checkTrendStart(symbol, price, candleChangePct);
           if (trendCheck.isTrendStart) {
-            const trendAlert: TradingAlert = {
-              id: `trend-${symbol}-${now}`,
-              symbol,
-              side: candleChangePct > 0 ? 'LONG' : 'SHORT',
-              reason: '🚀 TREND START',
-              change: candleChangePct,
-              price,
-              previousPrice: openPrice,
-              timestamp: now,
-              executed: false,
-              isElite: true,
-              eliteType: 'TREND_START',
-              volumeMultiplier: parseFloat(trendCheck.details.volumeRatio),
-              autoTrade: true,
-              trendDetails: trendCheck.details
-            };
-            newAlertsFound.push(trendAlert);
-            alertCreated = true;
+            // Aynı coin için TREND_START cooldown'ı kontrol et (config'den alınan değer: 60 saniye)
+            const lastTrendAlert = lastAlertDataRef.current[symbol];
+            const trendCooldownPassed = !lastTrendAlert || (now - lastTrendAlert.time > SYSTEM_CONFIG.ALERTS.TREND_COOLDOWN_MS);
             
-            lastAlertDataRef.current[symbol] = { time: now, change: absChange };
-            updatedTrends[symbol] = candleChangePct > 0 ? 'up' : 'down';
-            if (trendTimeoutsRef.current[symbol]) clearTimeout(trendTimeoutsRef.current[symbol]);
-            trendTimeoutsRef.current[symbol] = setTimeout(() => setTempTrends(p => ({...p, [symbol]: null})), 5000);
+            if (trendCooldownPassed) {
+              const trendAlert: TradingAlert = {
+                id: `trend-${symbol}-${now}`,
+                symbol,
+                side: candleChangePct > 0 ? 'LONG' : 'SHORT',
+                reason: '🚀 TREND START',
+                change: candleChangePct,
+                price,
+                previousPrice: openPrice,
+                timestamp: now,
+                executed: false,
+                isElite: true,
+                eliteType: 'TREND_START',
+                volumeMultiplier: parseFloat(trendCheck.details.volumeRatio),
+                autoTrade: true,
+                trendDetails: trendCheck.details
+              };
+              newAlertsFound.push(trendAlert);
+              alertCreated = true;
+              
+              lastAlertDataRef.current[symbol] = { time: now, change: absChange };
+              updatedTrends[symbol] = candleChangePct > 0 ? 'up' : 'down';
+              if (trendTimeoutsRef.current[symbol]) clearTimeout(trendTimeoutsRef.current[symbol]);
+              trendTimeoutsRef.current[symbol] = setTimeout(() => setTempTrends(p => ({...p, [symbol]: null})), 5000);
+            }
           }
         }
 
