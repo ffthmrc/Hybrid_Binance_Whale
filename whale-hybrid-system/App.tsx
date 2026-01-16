@@ -208,6 +208,12 @@ const App: React.FC = () => {
     // Config'den alınan değer: PUMP.COOLDOWN_MS
     const spamCheck = (now - tracker.lastPumpAlert) > SYSTEM_CONFIG.PUMP.COOLDOWN_MS; 
     const isPump = priceCondition && volumeCondition && spamCheck;
+    
+    // DEBUG: PUMP kontrolü logları
+    if (priceCondition && volumeCondition) {
+      console.log(`[PUMP-CHECK] ${symbol}: isPump=${isPump}, price=${priceCondition}, volume=${volumeCondition}, spam=${spamCheck}, cooldownMS=${SYSTEM_CONFIG.PUMP.COOLDOWN_MS}, lastAlert=${tracker.lastPumpAlert}`);
+    }
+    
     if (isPump) tracker.lastPumpAlert = now;
     
     return { isPump, volumeRatio };
@@ -402,76 +408,10 @@ const App: React.FC = () => {
 
         let alertCreated = false;
 
-        // 1. PUMP TESPİTİ
-        if (config.pumpDetectionEnabled) {
-          const pumpCheck = checkPumpStart(symbol, price, tickVolume, candleChangePct);
-          if (pumpCheck.isPump) {
-            const pumpAlert: TradingAlert = {
-              id: `pump-${symbol}-${now}`,
-              symbol,
-              side: candleChangePct > 0 ? 'LONG' : 'SHORT',
-              reason: '🔥 PUMP DETECTED',
-              change: candleChangePct,
-              price,
-              previousPrice: openPrice,
-              timestamp: now,
-              executed: false,
-              isElite: true, 
-              eliteType: 'PUMP_START',
-              volumeMultiplier: pumpCheck.volumeRatio,
-              autoTrade: false // Manuel onay gerekli
-            };
-            newAlertsFound.push(pumpAlert);
-            alertCreated = true;
-            
-            // Hybrid: Pump tespit edilince detaylı veri çek
-            fetchCandidateData(symbol);
-            
-            lastAlertDataRef.current[symbol] = { time: now, change: absChange };
-            updatedTrends[symbol] = candleChangePct > 0 ? 'up' : 'down';
-            if (trendTimeoutsRef.current[symbol]) clearTimeout(trendTimeoutsRef.current[symbol]);
-            trendTimeoutsRef.current[symbol] = setTimeout(() => setTempTrends(p => ({...p, [symbol]: null})), 5000);
-          }
-        }
-
-        // 2. TREND START TESPİTİ
-        if (!alertCreated) {
-          const trendCheck = checkTrendStart(symbol, price, candleChangePct);
-          if (trendCheck.isTrendStart) {
-            // Aynı coin için TREND_START cooldown'ı kontrol et (config'den alınan değer: 60 saniye)
-            const lastTrendAlert = lastAlertDataRef.current[symbol];
-            const trendCooldownPassed = !lastTrendAlert || (now - lastTrendAlert.time > SYSTEM_CONFIG.ALERTS.TREND_COOLDOWN_MS);
-            
-            if (trendCooldownPassed) {
-              const trendAlert: TradingAlert = {
-                id: `trend-${symbol}-${now}`,
-                symbol,
-                side: candleChangePct > 0 ? 'LONG' : 'SHORT',
-                reason: '🚀 TREND START',
-                change: candleChangePct,
-                price,
-                previousPrice: openPrice,
-                timestamp: now,
-                executed: false,
-                isElite: true,
-                eliteType: 'TREND_START',
-                volumeMultiplier: parseFloat(trendCheck.details.volumeRatio),
-                autoTrade: true,
-                trendDetails: trendCheck.details
-              };
-              newAlertsFound.push(trendAlert);
-              alertCreated = true;
-              
-              lastAlertDataRef.current[symbol] = { time: now, change: absChange };
-              updatedTrends[symbol] = candleChangePct > 0 ? 'up' : 'down';
-              if (trendTimeoutsRef.current[symbol]) clearTimeout(trendTimeoutsRef.current[symbol]);
-              trendTimeoutsRef.current[symbol] = setTimeout(() => setTempTrends(p => ({...p, [symbol]: null})), 5000);
-            }
-          }
-        }
-
-        // 3. QUICK MOMENTUM (Elite Alert yerine)
-        if (!alertCreated && absChange >= config.priceChangeThreshold) {
+        // YENİ AKIŞ: MOMENTUM (Standart) → PUMP (Aday) → TREND (İleri)
+        
+        // 1. QUICK MOMENTUM - HER ZAMAN KONTROL ET (Temel sinyal)
+        if (absChange >= config.priceChangeThreshold) {
           const lastAlert = lastAlertDataRef.current[symbol];
           const cooldownPassed = !lastAlert || (now - lastAlert.time > 8000); // 8 saniye cooldown
           
@@ -479,6 +419,7 @@ const App: React.FC = () => {
             const momentum = checkQuickMomentum(symbol, price, candleChangePct, currentQuoteVolume);
             
             if (momentum.isSignal) {
+              console.log(`[ALERT] ⚡ ${momentum.type} ${symbol}: change=${candleChangePct.toFixed(2)}%, strength=${momentum.strength.toFixed(0)}`);
               const newAlert: TradingAlert = { 
                 id: `${symbol}-${now}`, 
                 symbol, 
@@ -495,13 +436,78 @@ const App: React.FC = () => {
                 autoTrade: true
               };
               newAlertsFound.push(newAlert);
-              alertCreated = true;
-              
               lastAlertDataRef.current[symbol] = { time: now, change: absChange };
-              updatedTrends[symbol] = candleChangePct > 0 ? 'up' : 'down';
-              if (trendTimeoutsRef.current[symbol]) clearTimeout(trendTimeoutsRef.current[symbol]);
-              trendTimeoutsRef.current[symbol] = setTimeout(() => setTempTrends(p => ({...p, [symbol]: null})), 5000);
             }
+          }
+        }
+
+        // 2. PUMP TESPİTİ - BAĞIMSIZ (Aday olarak incelemeye al, diğerlerini engellemesin)
+        if (config.pumpDetectionEnabled) {
+          const pumpCheck = checkPumpStart(symbol, price, tickVolume, candleChangePct);
+          if (pumpCheck.isPump) {
+            console.log(`[ALERT] 🔥 PUMP ${symbol}: change=${candleChangePct.toFixed(2)}%, volume=${pumpCheck.volumeRatio.toFixed(2)}x`);
+            const pumpAlert: TradingAlert = {
+              id: `pump-${symbol}-${now}`,
+              symbol,
+              side: candleChangePct > 0 ? 'LONG' : 'SHORT',
+              reason: '🔥 PUMP DETECTED',
+              change: candleChangePct,
+              price,
+              previousPrice: openPrice,
+              timestamp: now,
+              executed: false,
+              isElite: true, 
+              eliteType: 'PUMP_START',
+              volumeMultiplier: pumpCheck.volumeRatio,
+              autoTrade: false // Manuel onay gerekli
+            };
+            newAlertsFound.push(pumpAlert);
+            
+            // Hybrid: Pump tespit edilince detaylı veri çek - ADAY OLARAK İNCELEMEYE AL
+            fetchCandidateData(symbol);
+            
+            updatedTrends[symbol] = candleChangePct > 0 ? 'up' : 'down';
+            if (trendTimeoutsRef.current[symbol]) clearTimeout(trendTimeoutsRef.current[symbol]);
+            trendTimeoutsRef.current[symbol] = setTimeout(() => setTempTrends(p => ({...p, [symbol]: null})), 5000);
+          } else if (absChange >= SYSTEM_CONFIG.PUMP.PRICE_CHANGE_MIN) {
+            // PUMP şartı sağlamadı ama fiyat hareketi var - debug log
+            console.log(`[PUMP-BLOCKED] ${symbol}: change=${candleChangePct.toFixed(2)}%, volumeOK=${pumpCheck.volumeRatio > 0}`);
+          }
+        }
+
+        // 3. TREND START TESPİTİ - BAĞIMSIZ (Kendi filtresiyle çalış)
+        const trendCheck = checkTrendStart(symbol, price, candleChangePct);
+        if (trendCheck.isTrendStart) {
+          console.log(`[TREND-DETECTED] ${symbol}: change=${candleChangePct.toFixed(2)}%, consolidation=${trendCheck.details.consolidationRange}%, breakout=${trendCheck.details.breakoutPercent}%`);
+          // Aynı coin için TREND_START cooldown'ı kontrol et (config'den alınan değer: 60 saniye)
+          const lastTrendAlert = lastAlertDataRef.current[symbol];
+          const trendCooldownPassed = !lastTrendAlert || (now - lastTrendAlert.time > SYSTEM_CONFIG.ALERTS.TREND_COOLDOWN_MS);
+          
+          if (trendCooldownPassed) {
+            console.log(`[ALERT] 🚀 TREND START ${symbol}: cooldown passed`);
+            const trendAlert: TradingAlert = {
+              id: `trend-${symbol}-${now}`,
+              symbol,
+              side: candleChangePct > 0 ? 'LONG' : 'SHORT',
+              reason: '🚀 TREND START',
+              change: candleChangePct,
+              price,
+              previousPrice: openPrice,
+              timestamp: now,
+              executed: false,
+              isElite: true,
+              eliteType: 'TREND_START',
+              volumeMultiplier: parseFloat(trendCheck.details.volumeRatio),
+              autoTrade: true,
+              trendDetails: trendCheck.details
+            };
+            newAlertsFound.push(trendAlert);
+            lastAlertDataRef.current[symbol] = { time: now, change: absChange };
+            updatedTrends[symbol] = candleChangePct > 0 ? 'up' : 'down';
+            if (trendTimeoutsRef.current[symbol]) clearTimeout(trendTimeoutsRef.current[symbol]);
+            trendTimeoutsRef.current[symbol] = setTimeout(() => setTempTrends(p => ({...p, [symbol]: null})), 5000);
+          } else {
+            console.log(`[TREND-COOLDOWN] ${symbol}: cooldown active, skipping`);
           }
         }
       });
