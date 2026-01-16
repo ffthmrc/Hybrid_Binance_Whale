@@ -219,6 +219,68 @@ const App: React.FC = () => {
     return { isPump, volumeRatio };
   }, []);
 
+  // ============ TREND START HELPER FUNCTIONS ============
+
+  /**
+   * Calculates the consolidation range percentage for recent candles
+   */
+  const calculateConsolidationRange = (candles: any[]): number => {
+    const last10Candles = candles.slice(-20);
+    const closes = last10Candles.map(c => c.close);
+    const priceRange = Math.max(...closes) - Math.min(...closes);
+    const avgPrice = closes.reduce((a, b) => a + b) / closes.length;
+    return (priceRange / avgPrice) * 100;
+  };
+
+  /**
+   * Checks if the price is consolidating (low volatility range)
+   */
+  const isConsolidating = (candles: any[]): { isConsolidating: boolean; rangePercent: number } => {
+    const rangePercent = calculateConsolidationRange(candles);
+    return {
+      isConsolidating: rangePercent < SYSTEM_CONFIG.TREND.CONSOLIDATION_MAX,
+      rangePercent
+    };
+  };
+
+  /**
+   * Checks if there's a breakout from the consolidation range
+   */
+  const isBreakout = (candleChangePct: number): boolean => {
+    return Math.abs(candleChangePct) >= SYSTEM_CONFIG.TREND.BREAKOUT_MIN;
+  };
+
+  /**
+   * Confirms if recent candles support the trend direction
+   */
+  const isTrendConfirmed = (candles: any[], isBullish: boolean): boolean => {
+    const confirmCandles = candles.slice(-(SYSTEM_CONFIG.TREND.TREND_CONFIRM_CANDLES + 1));
+
+    if (isBullish) {
+      return confirmCandles.every(c => c.close >= c.open * 0.999); // Small tolerance for bullish
+    } else {
+      return confirmCandles.every(c => c.close <= c.open * 1.001); // Small tolerance for bearish
+    }
+  };
+
+  /**
+   * Checks if the SMA context supports the trend direction
+   */
+  const isSMAContextValid = (candles: any[], isBullish: boolean): boolean => {
+    if (candles.length < 15) {
+      return true; // Not enough data, consider it valid
+    }
+
+    const sma7 = candles.slice(-7).reduce((sum, c) => sum + c.close, 0) / 7;
+    const sma15 = candles.slice(-15).reduce((sum, c) => sum + c.close, 0) / 15;
+
+    if (isBullish) {
+      return sma7 >= sma15 * 0.97; // SMA7 should be above SMA15 for bullish
+    } else {
+      return sma7 <= sma15 * 1.03; // SMA7 should be below SMA15 for bearish
+    }
+  };
+
   // GEVŞETİLMİŞ TREND START DETECTION
   const checkTrendStart = useCallback((
     symbol: string,
@@ -226,66 +288,53 @@ const App: React.FC = () => {
     candleChangePct: number
   ): { isTrendStart: boolean; details: any } => {
     const candles = candleHistoryRef.current[symbol] || [];
-    
-    // Config'den alınan değer: TREND.MIN_CANDLES
+
+    // Check 1: Sufficient data
     if (candles.length < SYSTEM_CONFIG.TREND.MIN_CANDLES) {
-      return { isTrendStart: false, details: { reason: 'INSUFFICIENT_DATA', candleCount: candles.length } };
+      return {
+        isTrendStart: false,
+        details: { reason: 'INSUFFICIENT_DATA', candleCount: candles.length }
+      };
     }
 
-    // 1. KONSOLİDASYON KONTROLÜ (Son 10 mum)
-    const last10Candles = candles.slice(-20);
-    const closes = last10Candles.map(c => c.close);
-    const priceRange = Math.max(...closes) - Math.min(...closes);
-    const avgPrice = closes.reduce((a, b) => a + b) / closes.length;
-    const rangePercent = (priceRange / avgPrice) * 100;
-    
-    // Config'den alınan değer: TREND.CONSOLIDATION_MAX
-    const isConsolidating = rangePercent < SYSTEM_CONFIG.TREND.CONSOLIDATION_MAX;
-    
-    if (!isConsolidating) {
-      return { isTrendStart: false, details: { reason: 'NO_CONSOLIDATION', range: rangePercent.toFixed(2) } };
+    // Check 2: Consolidation (required)
+    const consolidationCheck = isConsolidating(candles);
+    if (!consolidationCheck.isConsolidating) {
+      return {
+        isTrendStart: false,
+        details: { reason: 'NO_CONSOLIDATION', range: consolidationCheck.rangePercent.toFixed(2) }
+      };
     }
 
-    // 2. BREAKOUT KONTROLÜ
-    // Config'den alınan değer: TREND.BREAKOUT_MIN
-    const isBreakout = Math.abs(candleChangePct) >= SYSTEM_CONFIG.TREND.BREAKOUT_MIN;
-    
-    if (!isBreakout) {
-      return { isTrendStart: false, details: { reason: 'NO_BREAKOUT', change: candleChangePct.toFixed(2) } };
+    // Check 3: Breakout (required)
+    const hasBreakout = isBreakout(candleChangePct);
+    if (!hasBreakout) {
+      return {
+        isTrendStart: false,
+        details: { reason: 'NO_BREAKOUT', change: candleChangePct.toFixed(2) }
+      };
     }
 
-    // 3. TREND TEYİT (Son N mum aynı yönde mi?)
-    // Config'den alınan değer: TREND.TREND_CONFIRM_CANDLES
-    const last2Candles = candles.slice(-(SYSTEM_CONFIG.TREND.TREND_CONFIRM_CANDLES + 1));
+    // Determine trend direction
     const isBullish = candleChangePct > 0;
-    const trendConfirmed = isBullish 
-      ? last2Candles.every(c => c.close >= c.open * 0.999) // Küçük tolerans
-      : last2Candles.every(c => c.close <= c.open * 1.001);
-    
-    // Trend teyit zorunlu değil, sadece bonus
-    // if (!trendConfirmed) { ... } - KALDIRILDI
 
-    // 4. HACİM KONTROLÜ (opsiyonel, bonus puan)
+    // Check 4: Trend confirmation (optional, bonus)
+    const trendConfirmed = isTrendConfirmed(candles, isBullish);
+
+    // Check 5: Volume spike (optional, bonus)
     const pumpCheck = checkPumpStart(symbol, currentPrice, 0, candleChangePct);
     const hasVolumeSpike = pumpCheck.volumeRatio >= 1.3;
 
-    // 5. CONTEXT (SMA kontrolü - opsiyonel)
-    let contextOK = true;
-    if (candles.length >= 15) {
-      const sma7 = candles.slice(-7).reduce((sum, c) => sum + c.close, 0) / 7;
-      const sma15 = candles.slice(-15).reduce((sum, c) => sum + c.close, 0) / 15;
-      
-      if (isBullish && sma7 < sma15 * 0.97) contextOK = false;
-      if (!isBullish && sma7 > sma15 * 1.03) contextOK = false;
-    }
+    // Check 6: SMA context validation (optional, bonus)
+    const contextOK = isSMAContextValid(candles, isBullish);
 
-    // Final karar - daha gevşek
-    const isTrendStart = isBreakout && (trendConfirmed || hasVolumeSpike || contextOK);
+    // Final decision: Breakout is required, plus at least one bonus confirmation
+    const isTrendStart = hasBreakout && (trendConfirmed || hasVolumeSpike || contextOK);
 
-    return { 
-      isTrendStart, 
+    return {
+      isTrendStart,
       details: {
-        consolidationRange: rangePercent.toFixed(2),
+        consolidationRange: consolidationCheck.rangePercent.toFixed(2),
         breakoutPercent: candleChangePct.toFixed(2),
         volumeRatio: pumpCheck.volumeRatio.toFixed(2),
         trendConfirmed,
