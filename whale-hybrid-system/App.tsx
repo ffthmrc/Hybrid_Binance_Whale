@@ -175,8 +175,8 @@ const App: React.FC = () => {
     
     tracker.minuteStartVolume += tickVolume;
     
-    // GEVŞETİLMİŞ: %1.0 → %0.7
-    const priceCondition = Math.abs(priceChangePct) >= 1.0;
+    // Config'den alınan değer: PUMP.PRICE_CHANGE_MIN
+    const priceCondition = Math.abs(priceChangePct) >= SYSTEM_CONFIG.PUMP.PRICE_CHANGE_MIN;
     let volumeCondition = false;
     let volumeRatio = 0;
     
@@ -184,29 +184,29 @@ const App: React.FC = () => {
       const lastMinuteVolume = tracker.minuteVolumes[tracker.minuteVolumes.length - 1];
       const currentVolume = tracker.minuteStartVolume;
       
-      // GEVŞETİLMİŞ: 2.5x → 1.8x
-      const condition1 = currentVolume > lastMinuteVolume * 2.5;
+      // Config'den alınan değer: PUMP.VOLUME_RATIO_MIN
+      const condition1 = currentVolume > lastMinuteVolume * SYSTEM_CONFIG.PUMP.VOLUME_RATIO_MIN;
       
       let condition2 = false;
       if (tracker.minuteVolumes.length >= 5) {
         const last5Avg = tracker.minuteVolumes.slice(-5).reduce((a,b) => a+b, 0) / 5;
-        // GEVŞETİLMİŞ: 2.3x → 1.6x
-        condition2 = currentVolume > last5Avg * 2.3;
+        // Config'den alınan değer: PUMP.VOLUME_RATIO_5M_AVG
+        condition2 = currentVolume > last5Avg * SYSTEM_CONFIG.PUMP.VOLUME_RATIO_5M_AVG;
       }
       
       let condition3 = false;
       if (tracker.minuteVolumes.length >= 10) {
         const avg10 = tracker.minuteVolumes.slice(-10).reduce((a,b) => a+b, 0) / 10;
-        // GEVŞETİLMİŞ: 3.0x → 2.0x
-        condition3 = currentVolume > avg10 * 2.0;
+        // Config'den alınan değer: PUMP.VOLUME_RATIO_10M_AVG
+        condition3 = currentVolume > avg10 * SYSTEM_CONFIG.PUMP.VOLUME_RATIO_10M_AVG;
       }
       
       volumeCondition = condition1 || condition2 || condition3;
       volumeRatio = lastMinuteVolume > 0 ? currentVolume / lastMinuteVolume : 0;
     }
     
-    // GEVŞETİLMİŞ: 5 dakika → 2 dakika spam check
-    const spamCheck = (now - tracker.lastPumpAlert) > 120000; 
+    // Config'den alınan değer: PUMP.COOLDOWN_MS
+    const spamCheck = (now - tracker.lastPumpAlert) > SYSTEM_CONFIG.PUMP.COOLDOWN_MS; 
     const isPump = priceCondition && volumeCondition && spamCheck;
     if (isPump) tracker.lastPumpAlert = now;
     
@@ -221,8 +221,8 @@ const App: React.FC = () => {
   ): { isTrendStart: boolean; details: any } => {
     const candles = candleHistoryRef.current[symbol] || [];
     
-    // GEVŞETİLMİŞ: 20 mum → 10 mum minimum
-    if (candles.length < 20) {
+    // Config'den alınan değer: TREND.MIN_CANDLES
+    if (candles.length < SYSTEM_CONFIG.TREND.MIN_CANDLES) {
       return { isTrendStart: false, details: { reason: 'INSUFFICIENT_DATA', candleCount: candles.length } };
     }
 
@@ -233,24 +233,24 @@ const App: React.FC = () => {
     const avgPrice = closes.reduce((a, b) => a + b) / closes.length;
     const rangePercent = (priceRange / avgPrice) * 100;
     
-    // GEVŞETİLMİŞ: %0.5 → %2.0 (daha geniş konsolidasyon kabul)
-    const isConsolidating = rangePercent < 1.0;
+    // Config'den alınan değer: TREND.CONSOLIDATION_MAX
+    const isConsolidating = rangePercent < SYSTEM_CONFIG.TREND.CONSOLIDATION_MAX;
     
     if (!isConsolidating) {
       return { isTrendStart: false, details: { reason: 'NO_CONSOLIDATION', range: rangePercent.toFixed(2) } };
     }
 
     // 2. BREAKOUT KONTROLÜ
-    // GEVŞETİLMİŞ: %2 → %0.8
-    const isBreakout = Math.abs(candleChangePct) >= 1.0;
+    // Config'den alınan değer: TREND.BREAKOUT_MIN
+    const isBreakout = Math.abs(candleChangePct) >= SYSTEM_CONFIG.TREND.BREAKOUT_MIN;
     
     if (!isBreakout) {
       return { isTrendStart: false, details: { reason: 'NO_BREAKOUT', change: candleChangePct.toFixed(2) } };
     }
 
-    // 3. TREND TEYİT (Son 2 mum aynı yönde mi?)
-    // GEVŞETİLMİŞ: 3 mum → 2 mum
-    const last2Candles = candles.slice(-3);
+    // 3. TREND TEYİT (Son N mum aynı yönde mi?)
+    // Config'den alınan değer: TREND.TREND_CONFIRM_CANDLES
+    const last2Candles = candles.slice(-(SYSTEM_CONFIG.TREND.TREND_CONFIRM_CANDLES + 1));
     const isBullish = candleChangePct > 0;
     const trendConfirmed = isBullish 
       ? last2Candles.every(c => c.close >= c.open * 0.999) // Küçük tolerans
@@ -315,26 +315,26 @@ const App: React.FC = () => {
     let strength = 0;
     let isSignal = false;
 
-    // PARABOLIC: Yüksek hacim spike
-    if (volumeRatio > 2.0 && Math.abs(candleChangePct) >= 0.5) {
+    // PARABOLIC: Yüksek hacim spike (Config'den alınan değerler)
+    if (volumeRatio > SYSTEM_CONFIG.MOMENTUM.PARABOLIC_VOLUME_RATIO && Math.abs(candleChangePct) >= SYSTEM_CONFIG.MOMENTUM.PARABOLIC_PRICE_CHANGE) {
       type = 'PARABOLIC';
       strength = Math.min(100, volumeRatio * 30);
       isSignal = true;
     }
-    // STAIRCASE: Düzenli yükseliş/düşüş
-    else if ((isRising || isFalling) && volumeRatio > 1.2) {
+    // STAIRCASE: Düzenli yükseliş/düşüş (Config'den alınan değer)
+    else if ((isRising || isFalling) && volumeRatio > SYSTEM_CONFIG.MOMENTUM.STAIRCASE_VOLUME_RATIO) {
       type = 'STAIRCASE';
       strength = Math.min(100, Math.abs(priceChange5) * 20 + volumeRatio * 10);
       isSignal = true;
     }
-    // INSTITUTIONAL: Orta hacim, belirgin hareket
-    else if (volumeRatio > 1.4 && Math.abs(candleChangePct) >= 0.4) {
+    // INSTITUTIONAL: Orta hacim, belirgin hareket (Config'den alınan değerler)
+    else if (volumeRatio > SYSTEM_CONFIG.MOMENTUM.INSTITUTIONAL_VOLUME_RATIO && Math.abs(candleChangePct) >= SYSTEM_CONFIG.MOMENTUM.INSTITUTIONAL_PRICE_CHANGE) {
       type = 'INSTITUTIONAL';
       strength = Math.min(100, volumeRatio * 25 + Math.abs(candleChangePct) * 15);
       isSignal = true;
     }
-    // MOMENTUM: Temel sinyal
-    else if (Math.abs(candleChangePct) >= 0.6 && volumeRatio > 1.1) {
+    // MOMENTUM: Temel sinyal (Config'den alınan değerler)
+    else if (Math.abs(candleChangePct) >= SYSTEM_CONFIG.MOMENTUM.BASIC_PRICE_CHANGE && volumeRatio > SYSTEM_CONFIG.MOMENTUM.BASIC_VOLUME_RATIO) {
       type = 'MOMENTUM';
       strength = Math.min(100, Math.abs(candleChangePct) * 30 + volumeRatio * 15);
       isSignal = true;
